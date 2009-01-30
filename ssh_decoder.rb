@@ -58,12 +58,20 @@ class Stream
 	end
 
 	def readpacket
-		ciphlen = (CipherBlockSize[@decipher.name] || 16 rescue 16)
+		ciphlen = CipherBlockSize[@decipher.name] rescue nil if @decipher
+		ciphlen ||= 16
 		buf = read(ciphlen)
 		buf = @decipher.update(buf) if @decipher
 		p buf if $DEBUG
 
 		length = buf.unpack('N').first
+		if length > 0x10_0000
+			puts "bad packet :(" if $VERBOSE
+			@decipher.update read(16*1)
+			mac = read(@maclen)
+			@packets << SshPacket.new(buf.length+1, 0.chr+buf, '', mac)
+			return @packets.last
+		end
 		tbuf = read(length + 4 - ciphlen)
 		tbuf = @decipher.update(tbuf) if @decipher and not tbuf.empty?
 		buf = buf[4..-1] << tbuf
@@ -83,9 +91,13 @@ class Stream
 	end
 
 	def readstream
-		@zlib = ZLib::Inflate.new(nil) if @compr == 'zlib'
-		nil while @ptr < @data.length and not ['DISCONNECT', 'NEWKEYS'].include? readpacket.type
-		puts if $VERBOSE
+		begin
+			@zlib = ZLib::Inflate.new(nil) if @compr == 'zlib'
+			nil while @ptr < @data.length and not ['DISCONNECT', 'NEWKEYS'].include? readpacket.type
+			puts if $VERBOSE
+		rescue
+			puts $!, $!.message, $!.backtrace
+		end
 	end
 
 	def [](type)
@@ -119,6 +131,8 @@ class SshPacket
 		'CHANNEL_OPEN' => 90,
 		'CHANNEL_OPEN_CONFIRMATION' => 91,
 		'CHANNEL_OPEN_FAILURE' => 92,
+		'CHANNEL_DATA' => 94,
+		'CHANNEL_CLOSE' => 97,
 	}
 
 	attr_accessor :length, :payload, :pad, :mac, :interpreted, :type
@@ -139,7 +153,8 @@ class SshPacket
 	def interpret
 		ptr = 0
 		read = proc { |n| ptr += n ; @payload[ptr-n, n].to_s }
-		readstr = proc { read[read[4].unpack('N').first] }
+		readint = proc { read[4].unpack('N').first }
+		readstr = proc { read[readint[]] }
 		readstrlist = proc { readstr[].split(',') }
 		@type = read[1][0]
 		if SSH_MSG.index(@type)
@@ -171,7 +186,7 @@ class SshPacket
 		when 'SERVICE_REQUEST', 'SERVICE_ACCEPT'
 			@interpreted = { :service => readstr[] }
 		when 'DISCONNECT'
-			@interpreted = { :reason => read[4].unpack('N').first, :msg => readstr[], :lang => readstr[] }
+			@interpreted = { :reason => readint[], :msg => readstr[], :lang => readstr[] }
 		when 'USERAUTH_REQUEST'
 			@interpreted = { :username => readstr[], :nextservice => readstr[], :auth_method => readstr[] }
 			case @interpreted[:auth_method]
@@ -190,10 +205,19 @@ class SshPacket
 			@interpreted = { :meth_allowed => readstr[] }
 		when 'USERAUTH_SUCCESS'
 			@interpreted = {}
+		when 'CHANNEL_DATA'
+			@interpreted = { :wat => readint[], :data => readstr[] }
+			if @interpreted[:wat] == 0
+				@interpreted.delete :wat
+				p @interpreted[:data] if $VERBOSE
+				return
+			end
+		when 'CHANNEL_CLOSE'
+			@interpreted = { :foo => readint[] }
 		else
 			@interpreted = { :data => read[@payload.length-1] }
 		end
-		p @type, @interpreted if $VERBOSE
+		puts "#@type #{@interpreted.inspect}" if $VERBOSE
 	end
 
 	def [](x)
