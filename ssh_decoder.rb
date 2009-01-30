@@ -31,6 +31,7 @@ OptionParser.new { |o|
 	o.on('-s', '--server', '--vulnerable-server') { |i| opts[:client] = false }
 	o.on('-c', '--client', '--vulnerable-client') { |i| opts[:client] = true }
 	o.on('-S shared_secret_hex', '--secret shared_secret_hex', '--shared-secret shared_secret_hex') { |i| opts[:shared] = i }
+	o.on('--skip') { $skip_bad_packet = true }
 	o.on('-v') { $VERBOSE = true }
 }.parse!(ARGV)
 
@@ -66,8 +67,9 @@ class Stream
 
 		length = buf.unpack('N').first
 		if length > 0x10_0000
-			puts "bad packet :(" if $VERBOSE
-			@decipher.update read(16*1)
+			raise 'bad packet' if not $skip_bad_packet
+			puts "bad packet :("
+			@decipher.update read(16)
 			mac = read(@maclen)
 			@packets << SshPacket.new(buf.length+1, 0.chr+buf, '', mac)
 			return @packets.last
