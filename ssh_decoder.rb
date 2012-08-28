@@ -24,6 +24,7 @@
 require 'optparse'
 
 opts = {:pidrange => '0-0x7fff', :cpus => 1 }
+$skip_bad_packet = false
 OptionParser.new { |o|
 	o.on('-n cpus', '--n-cpu cpus') { |i| opts[:cpus] = i.to_i }
 	o.on('-h num', '--child-pid num') { |i| opts[:child_pid] = i.to_i }
@@ -80,12 +81,12 @@ class Stream
 
 		mac = read(@maclen)
 
-		pad = buf[0]
+		pad = buf[0, 1].unpack('C*')[0]
 		payload = buf[1...-pad]
 		pad = buf[-pad, pad]
 		case @compr
 		when 'none'
-		when 'zlib': payload = @zlib.inflate(payload)
+		when 'zlib'; payload = @zlib.inflate(payload)
 		end
 
 		@packets << SshPacket.new(length, payload, pad, mac)
@@ -114,28 +115,28 @@ end
 
 class SshPacket
 	SSH_MSG = {
-		'DISCONNECT' => 1,
-		'IGNORE' => 2,
-		'UNIMPLEMENTED' => 3,
-		'DEBUG' => 4,
-		'SERVICE_REQUEST' => 5,
-		'SERVICE_ACCEPT' => 6,
-		'KEXINIT' => 20,
-		'NEWKEYS' => 21,
-		'DH_GEX_REQUEST_OLD' => 30,
-		'DH_GEX_GROUP' => 31,
-		'DH_GEX_INIT' => 32,
-		'DH_GEX_REPLY' => 33,
-		'DH_GEX_REQUEST' => 34,
-		'USERAUTH_REQUEST' => 50,
-		'USERAUTH_FAILURE' => 51,
-		'USERAUTH_SUCCESS' => 52,
-		'USERAUTH_BANNER' => 53,
-		'CHANNEL_OPEN' => 90,
-		'CHANNEL_OPEN_CONFIRMATION' => 91,
-		'CHANNEL_OPEN_FAILURE' => 92,
-		'CHANNEL_DATA' => 94,
-		'CHANNEL_CLOSE' => 97,
+		 1 => 'DISCONNECT',
+		 2 => 'IGNORE',
+		 3 => 'UNIMPLEMENTED',
+		 4 => 'DEBUG',
+		 5 => 'SERVICE_REQUEST',
+		 6 => 'SERVICE_ACCEPT',
+		20 => 'KEXINIT',
+		21 => 'NEWKEYS',
+		30 => 'DH_GEX_REQUEST_OLD',
+		31 => 'DH_GEX_GROUP',
+		32 => 'DH_GEX_INIT',
+		33 => 'DH_GEX_REPLY',
+		34 => 'DH_GEX_REQUEST',
+		50 => 'USERAUTH_REQUEST',
+		51 => 'USERAUTH_FAILURE',
+		52 => 'USERAUTH_SUCCESS',
+		53 => 'USERAUTH_BANNER',
+		90 => 'CHANNEL_OPEN',
+		91 => 'CHANNEL_OPEN_CONFIRMATION',
+		92 => 'CHANNEL_OPEN_FAILURE',
+		94 => 'CHANNEL_DATA',
+		97 => 'CHANNEL_CLOSE',
 	}
 
 	attr_accessor :length, :payload, :pad, :mac, :interpreted, :type
@@ -156,13 +157,12 @@ class SshPacket
 	def interpret
 		ptr = 0
 		read = proc { |n| ptr += n ; @payload[ptr-n, n].to_s }
+		readbyte = proc { read[1].unpack('C').first }
 		readint = proc { read[4].unpack('N').first }
 		readstr = proc { read[readint[]] }
 		readstrlist = proc { readstr[].split(',') }
-		@type = read[1][0]
-		if SSH_MSG.index(@type)
-			@type = SSH_MSG.index(@type)
-		end
+		@type = readbyte[]
+		@type = SSH_MSG.fetch(@type, @type)
 
 		case @type
 		when 'KEXINIT'
@@ -177,7 +177,7 @@ class SshPacket
 				:compr_s2c => readstrlist[],
 				:lang_c2s => readstrlist[],
 				:lang_s2c => readstrlist[],
-				:first_kex_follows => read[1][0],
+				:first_kex_follows => readbyte[],
 				:reserved => read[4]
 			}
 		when 'DH_GEX_INIT'
@@ -195,10 +195,10 @@ class SshPacket
 			case @interpreted[:auth_method]
 			when 'none'
 			when 'password'
-				@interpreted[:change] = read[1][0]
+				@interpreted[:change] = readbyte[]
 				@interpreted[:password] = readstr[]
 			when 'publickey'
-				@interpreted[:testic] = read[1][0]
+				@interpreted[:testic] = readbyte[]
 				@interpreted[:keytype] = readstr[]
 				@interpreted[:key] = readkeyblob(readstr[])
 			else
@@ -235,8 +235,8 @@ def readkeyblob(str)
 	ret = {}
 	ret[:type] = readstr[]
 	case ret[:type]
-	when 'ssh-rsa': [:e, :n]
-	when 'ssh-dss': [:p, :q, :g, :y] # TODO check order
+	when 'ssh-rsa'; [:e, :n]
+	when 'ssh-dss'; [:p, :q, :g, :y] # TODO check order
 	else ret[:unknown] = read[str.length] ; []
 	end.map { |k| ret[k] = readstr[] }
 	ret
@@ -244,8 +244,8 @@ end
 def makekeyblob(key)
 	key[:type].sbin +
 	case key[:type]
-	when 'ssh-rsa': [:e, :n]
-	when 'ssh-dss': [:p, :q, :g, :y]
+	when 'ssh-rsa'; [:e, :n]
+	when 'ssh-dss'; [:p, :q, :g, :y]
 	end.map { |e| key[e].sbin }.join
 end
 
@@ -406,7 +406,7 @@ puts "handshake hash : " + handshake_hash if $VERBOSE
 
 we_need = CipherKeySize[cipher]
 session_id = handshake_hash
-derived = ['A', 'B', 'C', 'D', 'E', 'F'].map { |let|
+derived = %w[A B C D E F].map { |let|
 	k_h = [shared_secret.length/2, shared_secret].pack('NH*') + [handshake_hash].pack('H*')
 
 	key = OpenSSL::Digest::Digest.digest(kex_hash, k_h + let + [session_id].pack('H*'))
